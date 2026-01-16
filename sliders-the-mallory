@@ -1,0 +1,247 @@
+(() => {
+  "use strict";
+
+  const SECTION_ATTR="data-wf--main-slider--variant";
+  const MQ_MOBILE=matchMedia("(max-width: 991px)");
+  const MQ_DESKTOP=matchMedia("(min-width: 992px)");
+
+  const SCROLL_BEHAVIOR="smooth";
+  const SETTLE_DELAY=120;
+
+  const TA_STEP_MS=550;
+  const TA_WHEEL_MIN=10;
+  const TA_TELEPORT_DELAY_MS=500;
+  const TA_RESIZE_REINIT_MS=180;
+
+  const TA_ACTIVE_DELAY_MS = 250;
+  const TA_HEADING_DELAY_MS = 250;
+
+  const SWIPE_LOCK_PX = 10;
+
+  function sections(root=document){
+    return [...root.querySelectorAll(`section[${SECTION_ATTR}]`)];
+  }
+
+  function ensureScrollbarCSS(){
+    if(document.getElementById("kb-hide-x-scrollbar")) return;
+    const style = document.createElement("style");
+    style.id = "kb-hide-x-scrollbar";
+    style.textContent = `
+      .js-hide-x-scrollbar{ scrollbar-width:none; -ms-overflow-style:none; }
+      .js-hide-x-scrollbar::-webkit-scrollbar{ display:none; }
+      .the-mallory--ta-track{ will-change: transform; transform: translate3d(0,0,0); }
+    `;
+    document.head.appendChild(style);
+  }
+
+  /* =========================
+     BASE
+     ========================= */
+  function destroyBase(section){
+    const st=section && section.__baseS;
+    if(!st){ delete section.__baseV; return; }
+
+    st.slider.removeEventListener("scroll", st.onScroll, st.scrollOpts);
+    st.slider.removeEventListener("mousedown", st.onDown);
+    window.removeEventListener("mousemove", st.onMove);
+    window.removeEventListener("mouseup", st.onUp);
+    st.slider.removeEventListener("mouseleave", st.onLeave);
+
+    st.slider.removeEventListener("touchstart", st.onTStart, st.tOpts);
+    st.slider.removeEventListener("touchmove", st.onTMove, st.tOpts);
+    st.slider.removeEventListener("touchend", st.onTEnd);
+    st.slider.removeEventListener("touchcancel", st.onTEnd);
+
+    if(st.prevArrow) st.prevArrow.removeEventListener("click", st.onPrev);
+    if(st.nextArrow) st.nextArrow.removeEventListener("click", st.onNext);
+    st.dots.forEach((d,i)=>d.removeEventListener("click", st.onDot[i]));
+    st.dots.forEach((d,i)=>d.removeEventListener("keydown", st.onKey[i]));
+    if(st.settleTimer) clearTimeout(st.settleTimer);
+
+    delete section.__baseS;
+    delete section.__baseV;
+  }
+
+  function initBase(section){
+    if(!section || section.__baseV) return;
+
+    const variant = section.getAttribute(SECTION_ATTR) || "desktop-and-down";
+    if(variant==="ta-custom" && MQ_DESKTOP.matches) return;
+
+    ensureScrollbarCSS();
+
+    const slider = section.querySelector(".the-mallory--slider");
+    if(!slider) return;
+
+    slider.classList.add("js-hide-x-scrollbar");
+
+    if(slider.querySelector(".the-mallory--ta-track")) destroyTA(section);
+
+    const slides = [...section.querySelectorAll(".the-mallory--main-slide")];
+    if(!slides.length) return;
+
+    const dotList = section.querySelector(".the-mallory--slider_dot_list");
+    if(!dotList) return;
+
+    const arrowsWrapper = section.querySelector(".the-mallory--slider-arrows-wrapper");
+    const prevArrow = arrowsWrapper ? arrowsWrapper.querySelector(".the-mallory--arrow:not(.the-mallory--right)") : null;
+    const nextArrow = arrowsWrapper ? arrowsWrapper.querySelector(".the-mallory--arrow.the-mallory--right") : null;
+
+    let dots = [...dotList.querySelectorAll(".the-mallory--slider_dot_item")];
+    if(dots.length !== slides.length){
+      dotList.innerHTML="";
+      for(let i=0;i<slides.length;i++){
+        const item=document.createElement("div"); item.className="the-mallory--slider_dot_item";
+        const line=document.createElement("div"); line.className="the-mallory--slider_dot_line";
+        const bg=document.createElement("div"); bg.className="the-mallory--slider-dot-bg";
+        item.appendChild(line); item.appendChild(bg); dotList.appendChild(item);
+      }
+      dots=[...dotList.querySelectorAll(".the-mallory--slider_dot_item")];
+    }
+
+    const isTaMobile = (variant==="ta-custom" && !MQ_DESKTOP.matches);
+    if(isTaMobile){
+      slider.style.overflowX="auto";
+      slider.style.overflowY="hidden";
+      slider.style.webkitOverflowScrolling="touch";
+      slider.style.scrollSnapType="none";
+      slider.style.touchAction="pan-y";
+    }
+
+    let index=0, settleTimer=null;
+
+    const cx=()=>slider.scrollLeft + slider.clientWidth/2;
+    const slideCX=(el)=>el.offsetLeft + el.offsetWidth/2;
+
+    function nearestIndexByScroll(){
+      const c=cx();
+      let best=0, bestD=1e18;
+      for(let i=0;i<slides.length;i++){
+        const d=Math.abs(slideCX(slides[i]) - c);
+        if(d<bestD){ bestD=d; best=i; }
+      }
+      return best;
+    }
+
+    function scrollToIndex(i, behavior=SCROLL_BEHAVIOR){
+      const t=slides[i]; if(!t) return;
+      const sR=slider.getBoundingClientRect();
+      const tR=t.getBoundingClientRect();
+      const padL=parseFloat(getComputedStyle(slider).paddingLeft)||0;
+      slider.scrollTo({ left: slider.scrollLeft + (tR.left - sR.left) - padL, behavior });
+    }
+
+    function setActive(i){
+      index=i;
+      slides.forEach((s,idx)=>{
+        const a=idx===i;
+        s.classList.toggle("is-active",a);
+        s.classList.toggle("active",a);
+        s.querySelector(".the-mallory--slider-image.the-mallory--no-blur")?.classList.toggle("active",a);
+        s.querySelector(".the-mallory--ta-slide-heading")?.classList.toggle("active",a);
+      });
+
+      dots.forEach((d,idx)=>{
+        const a=idx===i;
+        d.classList.toggle("active",a);
+        d.setAttribute("aria-current",a);
+        d.querySelector(".the-mallory--slider_dot_line")?.style.setProperty("transform", a ? "scaleX(1)" : "scaleX(0)");
+      });
+
+      prevArrow?.classList.toggle("inactive", i===0);
+      nextArrow?.classList.toggle("inactive", i===slides.length-1);
+    }
+
+    function goTo(i){
+      i=Math.max(0,Math.min(slides.length-1,i));
+      setActive(i);
+      scrollToIndex(i);
+    }
+
+    dots.forEach((d,i)=>{
+      d.setAttribute("role","button");
+      d.setAttribute("tabindex","0");
+      d.addEventListener("click",()=>goTo(i));
+      d.addEventListener("keydown",e=>{
+        if(e.key==="Enter"||e.key===" "){ e.preventDefault(); goTo(i); }
+      });
+    });
+
+    prevArrow?.addEventListener("click",()=>goTo(index-1));
+    nextArrow?.addEventListener("click",()=>goTo(index+1));
+
+    slider.addEventListener("scroll",()=>{
+      const n=nearestIndexByScroll();
+      clearTimeout(settleTimer);
+      settleTimer=setTimeout(()=>{
+        if(n!==index) setActive(n);
+        if(MQ_MOBILE.matches) scrollToIndex(index);
+      }, SETTLE_DELAY);
+    },{passive:true});
+
+    setActive(0);
+    if(MQ_MOBILE.matches) scrollToIndex(0,"auto");
+
+    section.__baseV=1;
+    section.__baseS={ slider,dots,prevArrow,nextArrow };
+  }
+
+  /* =========================
+     TA DESKTOP
+     ========================= */
+  function destroyTA(section){
+    const st=section && section.__taS;
+    if(!st){ delete section.__taV; return; }
+    st.track.remove();
+    delete section.__taS;
+    delete section.__taV;
+  }
+
+  function initTA(section){
+    if(!section||section.__taV) return;
+    if(section.getAttribute(SECTION_ATTR)!=="ta-custom") return;
+    if(!MQ_DESKTOP.matches) return;
+
+    ensureScrollbarCSS();
+
+    const slider=section.querySelector(".the-mallory--slider");
+    if(!slider) return;
+
+    const realSlides=[...slider.querySelectorAll(":scope > .the-mallory--main-slide")];
+    if(!realSlides.length) return;
+
+    const track=document.createElement("div");
+    track.className="the-mallory--ta-track";
+    realSlides.forEach(s=>track.appendChild(s));
+    slider.appendChild(track);
+
+    section.__taV=1;
+    section.__taS={ slider,track };
+  }
+
+  function boot(root=document){
+    sections(root).forEach(initBase);
+    sections(root).forEach(initTA);
+  }
+
+  function handoff(){
+    sections(document).forEach(sec=>{
+      const slider=sec.querySelector(".the-mallory--slider");
+      destroyBase(sec);
+      destroyTA(sec);
+      slider && (slider.scrollLeft=0);
+      initBase(sec);
+      initTA(sec);
+    });
+  }
+
+  window.addEventListener("resize", handoff);
+
+  if(document.readyState==="loading"){
+    document.addEventListener("DOMContentLoaded",()=>{ boot(document); handoff(); });
+  } else {
+    boot(document); handoff();
+  }
+
+  document.addEventListener("swup:page:view",()=>{ boot(document); handoff(); });
+})();
