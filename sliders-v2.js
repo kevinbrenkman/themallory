@@ -107,7 +107,7 @@
       slider.style.overflowY="hidden";
       slider.style.webkitOverflowScrolling="touch";
       slider.style.scrollSnapType="none";
-      slider.style.touchAction="pan-y";
+      slider.style.touchAction="auto";
     }
 
     let index=0, settleTimer=null;
