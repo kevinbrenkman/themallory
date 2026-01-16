@@ -12,6 +12,10 @@
   const TA_TELEPORT_DELAY_MS=500;
   const TA_RESIZE_REINIT_MS=180;
 
+  // NEW: delayed visuals after move
+  const TA_ACTIVE_DELAY_MS = 250; // after slide finishes moving
+  const TA_HEADING_DELAY_MS = 250; // after image/no-blur becomes active
+
   /* =========================
      BASE SCROLL SLIDER (all variants, except TA desktop)
      ========================= */
@@ -165,6 +169,10 @@
     if(st.unlockTimer) clearTimeout(st.unlockTimer);
     if(st.resizeTimer) clearTimeout(st.resizeTimer);
 
+    // NEW timers
+    if(st.visualTimer1) clearTimeout(st.visualTimer1);
+    if(st.visualTimer2) clearTimeout(st.visualTimer2);
+
     // move REAL slides back out of track and remove track
     const kids=[...st.track.children];
     const start=st.offset, end=st.offset+st.realCount;
@@ -235,6 +243,15 @@
     let unlockTimer=null;
     let resizeTimer=null;
 
+    // NEW
+    let visualTimer1=null;
+    let visualTimer2=null;
+
+    function clearVisualTimers(){
+      if(visualTimer1){ clearTimeout(visualTimer1); visualTimer1=null; }
+      if(visualTimer2){ clearTimeout(visualTimer2); visualTimer2=null; }
+    }
+
     function freezeTransitionsOnce(){
       const els=section.querySelectorAll(".main-slide .slide");
       els.forEach(el=>{ el.__t=el.style.transition; el.style.transition="none"; });
@@ -259,15 +276,41 @@
       }
     }
 
-    function setActiveOnly(pos){
+    // NEW: remove all "visual active" immediately
+    function clearAllVisualActive(){
       for(let i=0;i<allSlides.length;i++){
-        const a=i===pos;
-        allSlides[i].classList.toggle("is-active",a);
-        allSlides[i].classList.toggle("active",a);
-        const nb=allSlides[i].querySelector(".slider-image.no-blur"); if(nb) nb.classList.toggle("active",a);
-        const h=allSlides[i].querySelector(".ta-slide-heading"); if(h) h.classList.toggle("active",a);
+        allSlides[i].classList.remove("is-active","active");
+        const nb=allSlides[i].querySelector(".slider-image.no-blur"); if(nb) nb.classList.remove("active");
+        const h=allSlides[i].querySelector(".ta-slide-heading"); if(h) h.classList.remove("active");
       }
+    }
+
+    // NEW: apply delayed active in 2 phases
+    function scheduleVisualActive(pos, animate){
+      clearVisualTimers();
+
+      // Always keep dots correct immediately
       setDots(realIndexFromDom(pos));
+
+      if(!animate){
+        // no delays on teleport / init snaps
+        allSlides[pos].classList.add("is-active","active");
+        const nb=allSlides[pos].querySelector(".slider-image.no-blur"); if(nb) nb.classList.add("active");
+        const h=allSlides[pos].querySelector(".ta-slide-heading"); if(h) h.classList.add("active");
+        return;
+      }
+
+      const t0 = TA_STEP_MS + TA_ACTIVE_DELAY_MS;
+      const t1 = t0 + TA_HEADING_DELAY_MS;
+
+      visualTimer1 = setTimeout(() => {
+        allSlides[pos].classList.add("is-active","active");
+        const nb=allSlides[pos].querySelector(".slider-image.no-blur"); if(nb) nb.classList.add("active");
+      }, t0);
+
+      visualTimer2 = setTimeout(() => {
+        const h=allSlides[pos].querySelector(".ta-slide-heading"); if(h) h.classList.add("active");
+      }, t1);
     }
 
     function xForCentered(p){
@@ -286,47 +329,44 @@
     function clearUnlock(){ if(unlockTimer){clearTimeout(unlockTimer); unlockTimer=null;} }
 
     function goToDom(p,animate=true){
-      clearTeleport(); clearUnlock();
+      clearTeleport(); clearUnlock(); clearVisualTimers();
       if(locked) return;
       locked=true;
+
       domPos=p;
-      setActiveOnly(domPos);
-      setTrackX(xForCentered(domPos), animate);
+
+      // NEW: remove current actives immediately so nothing anims during movement
+      clearAllVisualActive();
+
+      // dots now, visuals later
+      scheduleVisualActive(domPos, !!animate);
+
+      setTrackX(xForCentered(domPos), !!animate);
       unlockTimer=setTimeout(()=>{ locked=false; }, TA_STEP_MS);
     }
 
     function step(dir){ if(locked) return; goToDom(domPos+dir,true); }
 
-    // === your requested illusion-preserving teleport ===
+    // === teleport (no delayed visuals, no re-animation) ===
     function invisibleTeleport(fromPos,toPos){
+      clearVisualTimers();
       freezeTransitionsOnce();
 
-      // 1) add active to target real slide BEFORE snap
-      allSlides[toPos].classList.add("is-active","active");
-      {
-        const nb=allSlides[toPos].querySelector(".slider-image.no-blur"); if(nb) nb.classList.add("active");
-        const h=allSlides[toPos].querySelector(".ta-slide-heading"); if(h) h.classList.add("active");
-      }
-
-      // 2) snap track (atomic)
+      // snap track
       track.style.transition="none";
       track.style.transform=`translate3d(${xForCentered(toPos)}px,0,0)`;
-      track.offsetHeight; // reflow
+      track.offsetHeight;
       track.style.transition=`transform ${TA_STEP_MS}ms ease`;
 
-      // 3) remove active from clone AFTER snap
-      allSlides[fromPos].classList.remove("is-active","active");
-      {
-        const nb=allSlides[fromPos].querySelector(".slider-image.no-blur"); if(nb) nb.classList.remove("active");
-        const h=allSlides[fromPos].querySelector(".ta-slide-heading"); if(h) h.classList.remove("active");
-      }
-
       domPos=toPos;
-      setDots(realIndexFromDom(domPos));
+
+      // set visuals instantly at destination (no delay)
+      clearAllVisualActive();
+      scheduleVisualActive(domPos, false);
     }
 
     function scheduleTeleport(toPos){
-      clearTeleport(); clearUnlock();
+      clearTeleport(); clearUnlock(); clearVisualTimers();
       locked=true;
       const fromPos=domPos;
       tpTimer=setTimeout(()=>{
@@ -357,7 +397,6 @@
 
     const onDot=dots.map((_,i)=>()=>{ if(locked)return; goToDom(offset+i,true); });
 
-    // resize: destroy + start over
     function onResize(){
       clearTimeout(resizeTimer);
       resizeTimer=setTimeout(()=>{
@@ -367,7 +406,6 @@
       }, TA_RESIZE_REINIT_MS);
     }
 
-    // bind
     track.addEventListener("transitionend", onEnd);
     const wheelOpts={passive:false};
     slider.addEventListener("wheel", onWheel, wheelOpts);
@@ -379,11 +417,14 @@
     section.__taS={
       slider,track,allSlides,realCount,offset,dots,prevArrow,nextArrow,
       onEnd,onWheel,wheelOpts,onPrev,onNext,onDot,onResize,
-      tpTimer,unlockTimer,resizeTimer
+      tpTimer,unlockTimer,resizeTimer,
+      visualTimer1, visualTimer2
     };
     section.__taV=1;
 
-    setActiveOnly(domPos);
+    // init: no animation, apply instantly
+    clearAllVisualActive();
+    scheduleVisualActive(domPos, false);
     setTrackX(xForCentered(domPos), false);
   }
 
