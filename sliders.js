@@ -13,8 +13,8 @@
   const TA_RESIZE_REINIT_MS=180;
 
   // NEW: delayed visuals after move
-  const TA_ACTIVE_DELAY_MS = 250; // after slide finishes moving
-  const TA_HEADING_DELAY_MS = 250; // after image/no-blur becomes active
+  const TA_ACTIVE_DELAY_MS = 2500; // after slide finishes moving
+  const TA_HEADING_DELAY_MS = 2500; // after image/no-blur becomes active
 
   /* =========================
      BASE SCROLL SLIDER (all variants, except TA desktop)
