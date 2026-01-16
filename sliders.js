@@ -1,28 +1,36 @@
-() => {
+(() => {
   "use strict";
 
   const SECTION_ATTR = "data-wf--main-slider--variant";
-  const MQ_MOBILE = window.matchMedia("(max-width: 991px)");
-  const MQ_DESKTOP = window.matchMedia("(min-width: 992px)");
+  const MQ_MOBILE = matchMedia("(max-width: 991px)");
+  const MQ_DESKTOP = matchMedia("(min-width: 992px)");
 
   const SCROLL_BEHAVIOR = "smooth";
   const SETTLE_DELAY = 120;
 
-  // TA desktop (transform loop)
+  // TA desktop
   const TA_STEP_MS = 550;
   const TA_WHEEL_MIN = 10;
-  const TA_TELEPORT_DELAY_MS = 500; // wait for your path animation to finish
-  const TA_RESIZE_REINIT_MS = 180;  // debounce
+  const TA_TELEPORT_DELAY_MS = 500;
+  const TA_RESIZE_REINIT_MS = 180;
+
+  // GSAP scale
+  const GSAP_DUR = 0.45;
+  const GSAP_EASE = "power2.out";
+  const SCALE_INACTIVE = 0.5;
+  const SCALE_ACTIVE = 1;
+
+  const hasGSAP = () => typeof window.gsap !== "undefined";
 
   /* =========================
      BASE SCROLL SLIDER (all variants, except TA desktop)
      ========================= */
   function initBase(section) {
-    if (!section || section.__baseSliderV5) return;
-    section.__baseSliderV5 = true;
+    if (!section || section.__baseV6) return;
+    section.__baseV6 = 1;
 
     const variant = section.getAttribute(SECTION_ATTR) || "desktop-and-down";
-    if (variant === "ta-custom" && MQ_DESKTOP.matches) return; // TA desktop handled elsewhere
+    if (variant === "ta-custom" && MQ_DESKTOP.matches) return;
 
     const slider = section.querySelector(".slider");
     if (!slider) return;
@@ -37,7 +45,6 @@
     const prevArrow = arrowsWrapper ? arrowsWrapper.querySelector(".arrow:not(.right)") : null;
     const nextArrow = arrowsWrapper ? arrowsWrapper.querySelector(".arrow.right") : null;
 
-    // Build dots to match slides
     let dots = Array.from(dotList.querySelectorAll(".slider_dot_item"));
     if (dots.length !== slides.length) {
       dotList.innerHTML = "";
@@ -66,15 +73,15 @@
     const slideCX = (el) => el.offsetLeft + el.offsetWidth / 2;
 
     function nearestIndexByScroll() {
-      const scrollLeft = slider.scrollLeft;
-      const viewport = slider.clientWidth || 1;
-      const scrollRight = scrollLeft + viewport;
-      const totalWidth = slider.scrollWidth || 0;
-      const maxIndex = slides.length - 1;
-      const EDGE_EPS = 2;
+      const sl = slider.scrollLeft;
+      const vw = slider.clientWidth || 1;
+      const sr = sl + vw;
+      const tw = slider.scrollWidth || 0;
+      const max = slides.length - 1;
+      const EPS = 2;
 
-      if (scrollLeft <= EDGE_EPS) return 0;
-      if (totalWidth > 0 && Math.abs(totalWidth - scrollRight) <= EDGE_EPS) return maxIndex;
+      if (sl <= EPS) return 0;
+      if (tw > 0 && Math.abs(tw - sr) <= EPS) return max;
 
       const c = cx();
       let best = 0, bestD = Infinity;
@@ -86,41 +93,41 @@
     }
 
     function scrollToIndex(i, behavior = SCROLL_BEHAVIOR) {
-      const target = slides[i];
-      if (!target) return;
+      const t = slides[i];
+      if (!t) return;
 
-      const sliderRect = slider.getBoundingClientRect();
-      const targetRect = target.getBoundingClientRect();
-      const styles = window.getComputedStyle(slider);
-      const paddingLeft = parseFloat(styles.paddingLeft) || 0;
+      const sR = slider.getBoundingClientRect();
+      const tR = t.getBoundingClientRect();
+      const styles = getComputedStyle(slider);
+      const padL = parseFloat(styles.paddingLeft) || 0;
 
-      const deltaX = (targetRect.left - sliderRect.left) - paddingLeft;
-      slider.scrollTo({ left: slider.scrollLeft + deltaX, behavior });
+      const dx = (tR.left - sR.left) - padL;
+      slider.scrollTo({ left: slider.scrollLeft + dx, behavior });
     }
 
     function setActive(i) {
       index = i;
 
       for (let s = 0; s < slides.length; s++) {
-        const active = s === i;
-        slides[s].classList.toggle("is-active", active);
-        slides[s].classList.toggle("active", active);
+        const a = s === i;
+        slides[s].classList.toggle("is-active", a);
+        slides[s].classList.toggle("active", a);
 
         const nb = slides[s].querySelector(".slider-image.no-blur");
-        if (nb) nb.classList.toggle("active", active);
+        if (nb) nb.classList.toggle("active", a);
 
         const h = slides[s].querySelector(".ta-slide-heading");
-        if (h) h.classList.toggle("active", active);
+        if (h) h.classList.toggle("active", a);
       }
 
       for (let d = 0; d < dots.length; d++) {
-        const active = d === i;
-        dots[d].classList.toggle("active", active);
-        dots[d].setAttribute("aria-current", active ? "true" : "false");
+        const a = d === i;
+        dots[d].classList.toggle("active", a);
+        dots[d].setAttribute("aria-current", a ? "true" : "false");
         const line = dots[d].querySelector(".slider_dot_line");
         if (line) {
           line.style.transition = "none";
-          line.style.transform = active ? "scaleX(1)" : "scaleX(0)";
+          line.style.transform = a ? "scaleX(1)" : "scaleX(0)";
         }
       }
 
@@ -194,51 +201,52 @@
   }
 
   /* =========================
-     TA DESKTOP LOOP (fixed DOM, invisible teleport, rebuild on resize)
+     TA DESKTOP: transform loop + GSAP scaling (no CSS transition dependence)
      ========================= */
-  function destroyTADesktop(section) {
-    const st = section && section.__taState;
+  function destroyTA(section) {
+    const st = section && section.__taS;
     if (!st) return;
 
-    // remove listeners
+    st.track.removeEventListener("transitionend", st.onEnd);
     st.slider.removeEventListener("wheel", st.onWheel, st.wheelOpts);
-    st.track.removeEventListener("transitionend", st.onTransitionEnd);
-    window.removeEventListener("resize", st.onResize);
-
     if (st.prevArrow) st.prevArrow.removeEventListener("click", st.onPrev);
     if (st.nextArrow) st.nextArrow.removeEventListener("click", st.onNext);
-    st.dots.forEach((d, i) => d.removeEventListener("click", st.onDotClicks[i]));
+    st.dots.forEach((d, i) => d.removeEventListener("click", st.onDot[i]));
+    window.removeEventListener("resize", st.onResize);
 
-    // restore DOM: move real slides back to slider and remove track
-    const realStart = st.offset;
-    const realEnd = st.offset + st.realCount; // exclusive
-    const children = Array.from(st.track.children);
+    if (st.tpTimer) clearTimeout(st.tpTimer);
+    if (st.unlockTimer) clearTimeout(st.unlockTimer);
+    if (st.resizeTimer) clearTimeout(st.resizeTimer);
 
-    for (let i = realStart; i < realEnd; i++) {
-      const node = children[i];
-      if (node) st.slider.appendChild(node);
+    // Kill GSAP tweens on all slides in this section
+    if (hasGSAP()) {
+      st.allSlides.forEach(sl => {
+        const el = sl.querySelector(".slide") || sl;
+        window.gsap.killTweensOf(el);
+      });
     }
 
+    // restore DOM: move real slides back and remove track
+    const kids = Array.from(st.track.children);
+    const start = st.offset, end = st.offset + st.realCount;
+    for (let i = start; i < end; i++) st.slider.appendChild(kids[i]);
     st.track.remove();
 
-    // clear timers
-    if (st.pendingTeleportTimer) clearTimeout(st.pendingTeleportTimer);
-    if (st.unlockTimer) clearTimeout(st.unlockTimer);
-
-    // clear flags so it can re-init cleanly
-    delete section.__taState;
-    delete section.__taDesktopV6;
-
-    // allow base slider to re-init if we drop to tablet/down
-    delete section.__baseSliderV5;
+    delete section.__taS;
+    delete section.__taV;
   }
 
-  function initTADesktop(section) {
-    if (!section || section.__taDesktopV6) return;
+  function initTA(section) {
+    if (!section || section.__taV) return;
 
     const variant = section.getAttribute(SECTION_ATTR);
     if (variant !== "ta-custom") return;
     if (!MQ_DESKTOP.matches) return;
+
+    if (!hasGSAP()) {
+      console.warn("[TA slider] GSAP not found. Add GSAP before this script.");
+      return;
+    }
 
     const slider = section.querySelector(".slider");
     if (!slider) return;
@@ -250,17 +258,14 @@
 
     const realCount = realSlides.length;
 
-    // Pre-warm real images to reduce blank flash risk
-    realSlides.forEach((s) => {
-      s.querySelectorAll("img").forEach((img) => {
-        try {
-          img.loading = "eager";
-          if (img.decode) img.decode().catch(() => {});
-        } catch (_) {}
+    // pre-warm real images (helps blank flash)
+    realSlides.forEach(s => {
+      s.querySelectorAll("img").forEach(img => {
+        try { img.loading = "eager"; img.decode && img.decode().catch(() => {}); } catch (_) {}
       });
     });
 
-    // dots for TA
+    // dots
     const dotList = section.querySelector(".slider_dot_list");
     let dots = [];
     if (dotList) {
@@ -283,13 +288,12 @@
     const prevArrow = arrowsWrapper ? arrowsWrapper.querySelector(".arrow:not(.right)") : null;
     const nextArrow = arrowsWrapper ? arrowsWrapper.querySelector(".arrow.right") : null;
 
-    // track
+    // build track and clones
     const track = document.createElement("div");
     track.className = "ta-track";
     realSlides.forEach(s => track.appendChild(s));
     slider.appendChild(track);
 
-    // clones: [left clones | real | right clones]
     const leftClones = realSlides.map(s => s.cloneNode(true));
     const rightClones = realSlides.map(s => s.cloneNode(true));
     leftClones.reverse().forEach(c => track.insertBefore(c, track.firstChild));
@@ -298,27 +302,17 @@
     const allSlides = Array.from(track.querySelectorAll(".main-slide"));
     const offset = realCount;
 
-    let domPos = offset; // active position in allSlides
+    // GSAP: target node per slide
+    const scaleTargets = allSlides.map(sl => sl.querySelector(".slide") || sl);
+
+    // ensure transforms exist, and default to inactive scale
+    window.gsap.set(scaleTargets, { scale: SCALE_INACTIVE, transformOrigin: "50% 50%" });
+
+    let domPos = offset;
     let locked = false;
-    let pendingTeleportTimer = null;
+    let tpTimer = null;
     let unlockTimer = null;
-
-    function clearPendingTeleport() {
-      if (pendingTeleportTimer) { clearTimeout(pendingTeleportTimer); pendingTeleportTimer = null; }
-    }
-    function clearUnlockTimer() {
-      if (unlockTimer) { clearTimeout(unlockTimer); unlockTimer = null; }
-    }
-
-    function freezeScaleTransitionOnce() {
-      const els = section.querySelectorAll(".main-slide .slide");
-      els.forEach(el => { el.__t = el.style.transition; el.style.transition = "none"; });
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          els.forEach(el => { el.style.transition = el.__t || ""; delete el.__t; });
-        });
-      });
-    }
+    let resizeTimer = null;
 
     function realIndexFromDom(p) {
       const raw = p - offset;
@@ -328,30 +322,44 @@
     function setDots(realIdx) {
       if (!dots.length) return;
       for (let i = 0; i < dots.length; i++) {
-        const active = i === realIdx;
-        dots[i].classList.toggle("active", active);
-        dots[i].setAttribute("aria-current", active ? "true" : "false");
+        const a = i === realIdx;
+        dots[i].classList.toggle("active", a);
+        dots[i].setAttribute("aria-current", a ? "true" : "false");
         const line = dots[i].querySelector(".slider_dot_line");
         if (line) {
           line.style.transition = "none";
-          line.style.transform = active ? "scaleX(1)" : "scaleX(0)";
+          line.style.transform = a ? "scaleX(1)" : "scaleX(0)";
         }
       }
     }
 
-    function setActiveOnly(pos) {
+    function setActiveClasses(pos) {
       for (let i = 0; i < allSlides.length; i++) {
-        const active = i === pos;
-        allSlides[i].classList.toggle("is-active", active);
-        allSlides[i].classList.toggle("active", active);
-
+        const a = i === pos;
+        allSlides[i].classList.toggle("is-active", a);
+        allSlides[i].classList.toggle("active", a);
         const nb = allSlides[i].querySelector(".slider-image.no-blur");
-        if (nb) nb.classList.toggle("active", active);
-
+        if (nb) nb.classList.toggle("active", a);
         const h = allSlides[i].querySelector(".ta-slide-heading");
-        if (h) h.classList.toggle("active", active);
+        if (h) h.classList.toggle("active", a);
       }
       setDots(realIndexFromDom(pos));
+    }
+
+    function applyScales(activePos, animate) {
+      // kill any running tweens to avoid “double animate”
+      scaleTargets.forEach(t => window.gsap.killTweensOf(t));
+
+      if (!animate) {
+        window.gsap.set(scaleTargets, { scale: SCALE_INACTIVE });
+        window.gsap.set(scaleTargets[activePos], { scale: SCALE_ACTIVE });
+        return;
+      }
+
+      // snap everyone inactive first, then animate only the new active up
+      // (and optionally animate old active down if you want, but not required)
+      window.gsap.to(scaleTargets, { scale: SCALE_INACTIVE, duration: GSAP_DUR, ease: GSAP_EASE, overwrite: true });
+      window.gsap.to(scaleTargets[activePos], { scale: SCALE_ACTIVE, duration: GSAP_DUR, ease: GSAP_EASE, overwrite: true });
     }
 
     function xForCentered(p) {
@@ -367,90 +375,57 @@
       track.style.transform = `translate3d(${x}px,0,0)`;
     }
 
+    function clearTeleport() { if (tpTimer) { clearTimeout(tpTimer); tpTimer = null; } }
+    function clearUnlock() { if (unlockTimer) { clearTimeout(unlockTimer); unlockTimer = null; } }
+
     function goToDom(p, animate = true) {
-      clearPendingTeleport();
-      clearUnlockTimer();
+      clearTeleport(); clearUnlock();
       if (locked) return;
       locked = true;
 
       domPos = p;
-      setActiveOnly(domPos);
+      setActiveClasses(domPos);
+      applyScales(domPos, animate);
       setTrackX(xForCentered(domPos), animate);
 
       unlockTimer = setTimeout(() => { locked = false; }, TA_STEP_MS);
     }
 
-    function step(dir) {
-      if (locked) return;
-      goToDom(domPos + dir, true);
-    }
+    function step(dir) { if (locked) return; goToDom(domPos + dir, true); }
 
-    // Invisible teleport that preserves “active” without re-animating:
-    // add active to target first (frozen), snap, then remove active from old (still frozen)
-    function invisibleTeleport(fromPos, toPos) {
-      freezeScaleTransitionOnce();
+    // teleport without any re-animation: GSAP set() the scale state immediately
+    function teleportTo(newPos) {
+      domPos = newPos;
+      setActiveClasses(domPos);
+      applyScales(domPos, false); // <<< critical: no animation on teleport
 
-      // keep both active for this snap (no transitions, so no visible change)
-      allSlides[fromPos].classList.add("is-active", "active");
-      allSlides[toPos].classList.add("is-active", "active");
-
-      // keep inner toggles correct on target too
-      {
-        const nb = allSlides[toPos].querySelector(".slider-image.no-blur");
-        if (nb) nb.classList.add("active");
-        const h = allSlides[toPos].querySelector(".ta-slide-heading");
-        if (h) h.classList.add("active");
-      }
-
-      // snap track atomically
       track.style.transition = "none";
-      track.style.transform = `translate3d(${xForCentered(toPos)}px,0,0)`;
-      track.offsetHeight; // force reflow
+      track.style.transform = `translate3d(${xForCentered(domPos)}px,0,0)`;
+      track.offsetHeight; // reflow
       track.style.transition = `transform ${TA_STEP_MS}ms ease`;
-
-      // now it’s safe to drop active from the old clone (still frozen)
-      allSlides[fromPos].classList.remove("is-active", "active");
-      {
-        const nb = allSlides[fromPos].querySelector(".slider-image.no-blur");
-        if (nb) nb.classList.remove("active");
-        const h = allSlides[fromPos].querySelector(".ta-slide-heading");
-        if (h) h.classList.remove("active");
-      }
-
-      domPos = toPos;
-      setDots(realIndexFromDom(domPos));
     }
 
-    function scheduleTeleport(toPos) {
-      clearPendingTeleport();
-      clearUnlockTimer();
-      locked = true; // hold while your path animation finishes
-
-      const fromPos = domPos;
-
-      pendingTeleportTimer = setTimeout(() => {
-        pendingTeleportTimer = null;
-        invisibleTeleport(fromPos, toPos);
+    function scheduleTeleport(newPos) {
+      clearTeleport(); clearUnlock();
+      locked = true;
+      tpTimer = setTimeout(() => {
+        tpTimer = null;
+        teleportTo(newPos);
         locked = false;
       }, TA_TELEPORT_DELAY_MS);
     }
 
-    function onTransitionEnd(e) {
+    function onEnd(e) {
       if (e.propertyName !== "transform") return;
-
       const leftEnd = offset - 1;
       const rightStart = offset + realCount;
 
-      if (domPos <= leftEnd) {
-        scheduleTeleport(domPos + realCount);
-      } else if (domPos >= rightStart) {
-        scheduleTeleport(domPos - realCount);
-      }
+      if (domPos <= leftEnd) scheduleTeleport(domPos + realCount);
+      else if (domPos >= rightStart) scheduleTeleport(domPos - realCount);
     }
 
     function onWheel(e) {
-      const dx = e.deltaX || 0;
-      const dy = e.deltaY || 0;
+      const dx = e.deltaX || 0, dy = e.deltaY || 0;
       const primary = Math.abs(dy) >= Math.abs(dx) ? dy : dx;
       if (Math.abs(primary) < TA_WHEEL_MIN) return;
       e.preventDefault();
@@ -460,55 +435,46 @@
     function onPrev() { step(-1); }
     function onNext() { step(1); }
 
-    // dots click → jump to real set position (no looping needed here)
-    const onDotClicks = dots.map((_, i) => () => {
+    const onDot = dots.map((_, i) => () => {
       if (locked) return;
       goToDom(offset + i, true);
     });
 
+    function onResize() {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        destroyTA(section);
+        initBase(section);
+        initTA(section);
+      }, TA_RESIZE_REINIT_MS);
+    }
+
     // bind
-    track.addEventListener("transitionend", onTransitionEnd);
+    track.addEventListener("transitionend", onEnd);
     const wheelOpts = { passive: false };
     slider.addEventListener("wheel", onWheel, wheelOpts);
     if (prevArrow) prevArrow.addEventListener("click", onPrev);
     if (nextArrow) nextArrow.addEventListener("click", onNext);
-    dots.forEach((d, i) => d.addEventListener("click", onDotClicks[i]));
-
-    // reinit on resize (destroy + rebuild)
-    let resizeTimer = null;
-    function onResize() {
-      clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => {
-        // always destroy + restart, as requested
-        destroyTADesktop(section);
-        // re-boot this section only
-        initBase(section);
-        initTADesktop(section);
-      }, TA_RESIZE_REINIT_MS);
-    }
+    dots.forEach((d, i) => d.addEventListener("click", onDot[i]));
     window.addEventListener("resize", onResize);
 
-    // store state for teardown
-    section.__taState = {
-      slider, track, allSlides, realCount, offset,
-      prevArrow, nextArrow, dots,
-      onWheel, wheelOpts, onTransitionEnd,
-      onPrev, onNext, onDotClicks,
-      onResize,
-      pendingTeleportTimer, unlockTimer
+    section.__taS = {
+      slider, track, allSlides, realCount, offset, dots,
+      prevArrow, nextArrow, onEnd, onWheel, wheelOpts, onPrev, onNext, onDot, onResize,
+      tpTimer, unlockTimer, resizeTimer
     };
-
-    section.__taDesktopV6 = true;
+    section.__taV = 1;
 
     // init
-    setActiveOnly(domPos);
+    setActiveClasses(domPos);
+    applyScales(domPos, false);
     setTrackX(xForCentered(domPos), false);
   }
 
   function boot(root = document) {
     const sections = Array.from(root.querySelectorAll(`section[${SECTION_ATTR}]`));
     sections.forEach(initBase);
-    sections.forEach(initTADesktop);
+    sections.forEach(initTA);
   }
 
   if (document.readyState === "loading") {
