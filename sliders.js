@@ -8,17 +8,21 @@
   const SCROLL_BEHAVIOR = "smooth";
   const SETTLE_DELAY = 120;
 
-  // TA desktop
   const TA_STEP_MS = 550;
   const TA_WHEEL_MIN = 10;
   const TA_TELEPORT_DELAY_MS = 500;
   const TA_RESIZE_REINIT_MS = 180;
 
-  // GSAP scale
-  const GSAP_DUR = 0.45;
-  const GSAP_EASE = "power2.out";
+  // GSAP anims
   const SCALE_INACTIVE = 0.5;
   const SCALE_ACTIVE = 1;
+  const SCALE_DUR = 0.45;
+  const SCALE_EASE = "power2.out";
+
+  const CLIP_ACTIVE = 50; // percent
+  const CLIP_INACTIVE = 0;
+  const CLIP_DUR = 0.45;
+  const CLIP_EASE = "power2.out";
 
   const hasGSAP = () => typeof window.gsap !== "undefined";
 
@@ -26,8 +30,8 @@
      BASE SCROLL SLIDER (all variants, except TA desktop)
      ========================= */
   function initBase(section) {
-    if (!section || section.__baseV6) return;
-    section.__baseV6 = 1;
+    if (!section || section.__baseV7) return;
+    section.__baseV7 = true;
 
     const variant = section.getAttribute(SECTION_ATTR) || "desktop-and-down";
     if (variant === "ta-custom" && MQ_DESKTOP.matches) return;
@@ -201,7 +205,7 @@
   }
 
   /* =========================
-     TA DESKTOP: transform loop + GSAP scaling (no CSS transition dependence)
+     TA DESKTOP: transform loop + GSAP scale + GSAP clip-path
      ========================= */
   function destroyTA(section) {
     const st = section && section.__taS;
@@ -218,12 +222,10 @@
     if (st.unlockTimer) clearTimeout(st.unlockTimer);
     if (st.resizeTimer) clearTimeout(st.resizeTimer);
 
-    // Kill GSAP tweens on all slides in this section
+    // kill GSAP tweens
     if (hasGSAP()) {
-      st.allSlides.forEach(sl => {
-        const el = sl.querySelector(".slide") || sl;
-        window.gsap.killTweensOf(el);
-      });
+      st.scaleTargets.forEach(t => gsap.killTweensOf(t));
+      st.clipTargets.forEach(t => gsap.killTweensOf(t));
     }
 
     // restore DOM: move real slides back and remove track
@@ -244,7 +246,7 @@
     if (!MQ_DESKTOP.matches) return;
 
     if (!hasGSAP()) {
-      console.warn("[TA slider] GSAP not found. Add GSAP before this script.");
+      console.warn("[TA slider] GSAP not found.");
       return;
     }
 
@@ -258,14 +260,14 @@
 
     const realCount = realSlides.length;
 
-    // pre-warm real images (helps blank flash)
+    // pre-warm real images (reduces blank flash)
     realSlides.forEach(s => {
       s.querySelectorAll("img").forEach(img => {
         try { img.loading = "eager"; img.decode && img.decode().catch(() => {}); } catch (_) {}
       });
     });
 
-    // dots
+    // dots (rebuild to realCount)
     const dotList = section.querySelector(".slider_dot_list");
     let dots = [];
     if (dotList) {
@@ -288,7 +290,7 @@
     const prevArrow = arrowsWrapper ? arrowsWrapper.querySelector(".arrow:not(.right)") : null;
     const nextArrow = arrowsWrapper ? arrowsWrapper.querySelector(".arrow.right") : null;
 
-    // build track and clones
+    // build track + clones
     const track = document.createElement("div");
     track.className = "ta-track";
     realSlides.forEach(s => track.appendChild(s));
@@ -302,11 +304,19 @@
     const allSlides = Array.from(track.querySelectorAll(".main-slide"));
     const offset = realCount;
 
-    // GSAP: target node per slide
+    // GSAP targets
     const scaleTargets = allSlides.map(sl => sl.querySelector(".slide") || sl);
+    const clipTargets = allSlides.map(sl => sl.querySelector("img.slider-image.no-blur"));
 
-    // ensure transforms exist, and default to inactive scale
-    window.gsap.set(scaleTargets, { scale: SCALE_INACTIVE, transformOrigin: "50% 50%" });
+    // initial states (GSAP owns these)
+    gsap.set(scaleTargets, { scale: SCALE_INACTIVE, transformOrigin: "50% 50%" });
+    clipTargets.forEach(img => {
+      if (!img) return;
+      gsap.set(img, {
+        clipPath: `circle(${CLIP_INACTIVE}%)`,
+        webkitClipPath: `circle(${CLIP_INACTIVE}%)`
+      });
+    });
 
     let domPos = offset;
     let locked = false;
@@ -336,30 +346,71 @@
     function setActiveClasses(pos) {
       for (let i = 0; i < allSlides.length; i++) {
         const a = i === pos;
+
         allSlides[i].classList.toggle("is-active", a);
         allSlides[i].classList.toggle("active", a);
+
         const nb = allSlides[i].querySelector(".slider-image.no-blur");
         if (nb) nb.classList.toggle("active", a);
+
         const h = allSlides[i].querySelector(".ta-slide-heading");
         if (h) h.classList.toggle("active", a);
       }
       setDots(realIndexFromDom(pos));
     }
 
-    function applyScales(activePos, animate) {
-      // kill any running tweens to avoid “double animate”
-      scaleTargets.forEach(t => window.gsap.killTweensOf(t));
+    function animateToActive(pos, animate) {
+      // prevent double-running
+      scaleTargets.forEach(t => gsap.killTweensOf(t));
+      clipTargets.forEach(t => t && gsap.killTweensOf(t));
 
       if (!animate) {
-        window.gsap.set(scaleTargets, { scale: SCALE_INACTIVE });
-        window.gsap.set(scaleTargets[activePos], { scale: SCALE_ACTIVE });
+        gsap.set(scaleTargets, { scale: SCALE_INACTIVE });
+        gsap.set(scaleTargets[pos], { scale: SCALE_ACTIVE });
+
+        clipTargets.forEach(img => {
+          if (!img) return;
+          gsap.set(img, {
+            clipPath: `circle(${CLIP_INACTIVE}%)`,
+            webkitClipPath: `circle(${CLIP_INACTIVE}%)`
+          });
+        });
+        const activeImg = clipTargets[pos];
+        if (activeImg) {
+          gsap.set(activeImg, {
+            clipPath: `circle(${CLIP_ACTIVE}%)`,
+            webkitClipPath: `circle(${CLIP_ACTIVE}%)`
+          });
+        }
         return;
       }
 
-      // snap everyone inactive first, then animate only the new active up
-      // (and optionally animate old active down if you want, but not required)
-      window.gsap.to(scaleTargets, { scale: SCALE_INACTIVE, duration: GSAP_DUR, ease: GSAP_EASE, overwrite: true });
-      window.gsap.to(scaleTargets[activePos], { scale: SCALE_ACTIVE, duration: GSAP_DUR, ease: GSAP_EASE, overwrite: true });
+      // scale: all down, active up
+      gsap.to(scaleTargets, { scale: SCALE_INACTIVE, duration: SCALE_DUR, ease: SCALE_EASE, overwrite: true });
+      gsap.to(scaleTargets[pos], { scale: SCALE_ACTIVE, duration: SCALE_DUR, ease: SCALE_EASE, overwrite: true });
+
+      // clip: all to 0, active to 50
+      clipTargets.forEach(img => {
+        if (!img) return;
+        gsap.to(img, {
+          clipPath: `circle(${CLIP_INACTIVE}%)`,
+          webkitClipPath: `circle(${CLIP_INACTIVE}%)`,
+          duration: CLIP_DUR,
+          ease: CLIP_EASE,
+          overwrite: true
+        });
+      });
+
+      const activeImg = clipTargets[pos];
+      if (activeImg) {
+        gsap.to(activeImg, {
+          clipPath: `circle(${CLIP_ACTIVE}%)`,
+          webkitClipPath: `circle(${CLIP_ACTIVE}%)`,
+          duration: CLIP_DUR,
+          ease: CLIP_EASE,
+          overwrite: true
+        });
+      }
     }
 
     function xForCentered(p) {
@@ -385,7 +436,7 @@
 
       domPos = p;
       setActiveClasses(domPos);
-      applyScales(domPos, animate);
+      animateToActive(domPos, animate);
       setTrackX(xForCentered(domPos), animate);
 
       unlockTimer = setTimeout(() => { locked = false; }, TA_STEP_MS);
@@ -393,15 +444,14 @@
 
     function step(dir) { if (locked) return; goToDom(domPos + dir, true); }
 
-    // teleport without any re-animation: GSAP set() the scale state immediately
     function teleportTo(newPos) {
       domPos = newPos;
       setActiveClasses(domPos);
-      applyScales(domPos, false); // <<< critical: no animation on teleport
+      animateToActive(domPos, false); // no re-animation on teleport
 
       track.style.transition = "none";
       track.style.transform = `translate3d(${xForCentered(domPos)}px,0,0)`;
-      track.offsetHeight; // reflow
+      track.offsetHeight;
       track.style.transition = `transform ${TA_STEP_MS}ms ease`;
     }
 
@@ -417,6 +467,7 @@
 
     function onEnd(e) {
       if (e.propertyName !== "transform") return;
+
       const leftEnd = offset - 1;
       const rightStart = offset + realCount;
 
@@ -425,7 +476,8 @@
     }
 
     function onWheel(e) {
-      const dx = e.deltaX || 0, dy = e.deltaY || 0;
+      const dx = e.deltaX || 0;
+      const dy = e.deltaY || 0;
       const primary = Math.abs(dy) >= Math.abs(dx) ? dy : dx;
       if (Math.abs(primary) < TA_WHEEL_MIN) return;
       e.preventDefault();
@@ -459,15 +511,16 @@
     window.addEventListener("resize", onResize);
 
     section.__taS = {
-      slider, track, allSlides, realCount, offset, dots,
-      prevArrow, nextArrow, onEnd, onWheel, wheelOpts, onPrev, onNext, onDot, onResize,
+      slider, track, allSlides, realCount, offset, dots, prevArrow, nextArrow,
+      scaleTargets, clipTargets,
+      onEnd, onWheel, wheelOpts, onPrev, onNext, onDot, onResize,
       tpTimer, unlockTimer, resizeTimer
     };
-    section.__taV = 1;
+    section.__taV = true;
 
-    // init
+    // init state
     setActiveClasses(domPos);
-    applyScales(domPos, false);
+    animateToActive(domPos, false);
     setTrackX(xForCentered(domPos), false);
   }
 
